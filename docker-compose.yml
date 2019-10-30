@@ -1,0 +1,199 @@
+version: '3.4'
+services:
+  # FRONT
+  grafana:
+    image: grafana/grafana
+    depends_on:
+      - prometheus
+    ports:
+      # The WebUI for Grafana is served on port 3000
+      - "{{ grafana_external_port }}:3000"
+    volumes:
+      - type: volume
+        source: grafana_data
+        target: /var/lib/grafana
+        volume:
+          nocopy: true
+      - type: volume
+        source: grafana_provisioning
+        target: /etc/grafana/provisioning
+        volume:
+          nocopy: true
+      - type: volume
+        source: grafana-config
+        target: /etc/grafana
+        volume:
+          nocopy: true
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${grafana_passwd}
+      GF_USERS_ALLOW_SIGN_UP: false
+    networks:
+      - monitor-net
+    user: "104"
+    deploy:
+      replicas: {{ grafana_deploy_replica }}
+      placement:
+        constraints:
+          - node.role != manager
+      restart_policy:
+        condition: on-failure
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - type: volume
+        source: prometheus_data
+        target: /prometheus
+        volume:
+          nocopy: true
+      - type: volume
+        source: prometheus_etc
+        target: /etc/prometheus
+        volume:
+          nocopy: true
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - 9191:9090
+    depends_on:
+      - cadvisor
+    networks:
+      - monitor-net
+    deploy:
+      placement:
+        constraints:
+          - node.role != manager
+      restart_policy:
+        condition: on-failure
+
+  alert-web:
+    image: alerta/alerta-web
+    ports:
+      - "4448:8080"
+    depends_on:
+      - alert-db
+    environment:
+      - DEBUG=0  # remove this line to turn DEBUG off
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@alert-db:5432/monitoring # Those vars are for docker swarm env vars
+      - AUTH_REQUIRED=True
+      - ADMIN_KEY=
+      - ADMIN_USERS=${ALERTA_JCU},${ALERTA_OTHER}
+      - PLUGINS=reject,blackout,normalise,enhance,prometheus
+    restart: always
+    volumes:
+      - type: volume
+        source: alerta_app
+        target: /app
+        volume:
+          nocopy: true
+      - type: volume
+        source: alerta_configjson
+        target: /usr/share/nginx/html
+        volume:
+          nocopy: true
+    networks:
+      - monitor-net
+
+  alert-db:
+    image: postgres
+    deploy:
+      placement:
+        constraints:
+          - node.role != manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - type: volume
+        source: alerta_pgdata
+        target: /var/lib/postgresql/data
+        volume:
+          nocopy: true
+    environment:
+      POSTGRES_DB: monitoring
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: always
+
+  node-exporter:
+    image: prom/node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - --collector.filesystem.ignored-mount-points
+      - "^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)"
+    ports:
+      - 9100:9100
+    networks:
+      - monitor-net
+    deploy:
+      mode: global
+      restart_policy:
+          condition: on-failure
+
+  cadvisor:
+    image: google/cadvisor
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - 8181:8080
+    networks:
+      - monitor-net
+    deploy:
+      mode: global
+      restart_policy:
+          condition: on-failure
+
+volumes:
+  grafana_data:
+    driver_opts:
+      type: "nfs"
+      o: "addr={{ grafana_nfs_server }},nolock,soft,rw"
+      device: ":{{ grafana_data_nfs_path }}"
+  grafana_provisioning:
+    driver_opts:
+      type: "nfs"
+      o: "addr={{ grafana_nfs_server }},nolock,soft,rw"
+      device: ":{{ grafana_provisioning_nfs_path }}"
+  grafana-config:
+    driver_opts:
+      type: "nfs"
+      o: "addr={{ grafana_nfs_server }},nolock,soft,rw"
+      device: ":{{ grafana_config_nfs_path }}"
+  alerta_app:
+    driver_opts:
+      type: "nfs"
+      o: "addr=10.10.1.200,nolock,soft,rw"
+      device: ":/share/swarm/alerta/app"
+  alerta_pgdata:
+    driver_opts:
+      type: "nfs"
+      o: "addr=10.10.1.200,nolock,soft,rw"
+      device: ":/share/swarm/alerta/pg-data"
+  alerta_configjson:
+    driver_opts:
+      type: "nfs"
+      o: "addr=10.10.1.200,nolock,soft,rw"
+      device: ":/share/swarm/alerta/nginx"
+  prometheus_data:
+    driver_opts:
+      type: "nfs"
+      o: "addr=10.10.1.200,nolock,soft,rw"
+      device: ":/share/swarm/prometheus/data"
+  prometheus_etc:
+    driver_opts:
+      type: "nfs"
+      o: "addr=10.10.1.200,nolock,soft,rw"
+      device: ":/share/swarm/prometheus/etc"
+
+networks:
+  monitor-net:
