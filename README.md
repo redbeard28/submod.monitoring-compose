@@ -20,6 +20,7 @@ Please, provides thoses variables in your playbook
 
 ## Grafana Vars
 Those vars are use by ansible
+
 | vars | what ? | exemple |
 |:------:|--------|:-------:|
 | {{ grafana_deploy_replica }} | INTEGER: Number of replica       |    2     |
@@ -34,6 +35,7 @@ Look at promethues.yml file and change to your suit
 
 ## Alerta Vars
 Those vars are use by docker swarm env
+
 | vars | what ? | exemple |
 |:------:|--------|:-------:|
 | ${POSTGRES_USER} | STRING: postresql username       |    mypostgreuser     |
